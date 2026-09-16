@@ -1,0 +1,111 @@
+name: "Terraform CI/CD Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # -------------------------------------------------------------
+  # JOB 1: Validaciones y Planificación (Dev / PRs)
+  # -------------------------------------------------------------
+  plan:
+    name: "Terraform Plan & Validate"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # 1. Validación de formato
+      - name: Terraform Format Check
+        run: terraform fmt -check
+
+      # 2. Inicialización
+      - name: Terraform Init
+        run: terraform init
+
+      # 3. Validación de sintaxis
+      - name: Terraform Validate
+        run: terraform validate
+
+      # 4. Generación y conservación del Plan
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -out=tfplan
+
+      # 5. Guardar artefacto del plan para revisión y posterior apply
+      - name: Upload Terraform Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ./terraform/tfplan
+
+  # -------------------------------------------------------------
+  # JOB 2: Aprobación Manual y Apply (Producción)
+  # -------------------------------------------------------------
+  apply:
+    name: "Terraform Apply (Production)"
+    needs: plan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    
+    # Exige aprobación manual desde las reglas del Environment en GitHub Settings
+    environment: production
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Terraform Init
+        run: terraform init
+
+      # Descargar el artefacto tfplan generado en el Job 1
+      - name: Download Terraform Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ./terraform
+
+      # Ejecución controlada utilizando el plan guardado
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
